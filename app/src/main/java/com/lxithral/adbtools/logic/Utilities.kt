@@ -6,6 +6,7 @@ import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import com.topjohnwu.superuser.Shell
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
@@ -60,6 +61,12 @@ object RootState {
     @Volatile var probeFailure: String? = null
         private set
 
+    /** 本机 su 的情况：路径 + 是否可执行（区分"没装 su"和"装了但没授权"） */
+    @Volatile var suPath: String? = null
+        private set
+    @Volatile var suExecutable: Boolean = false
+        private set
+
     fun recordProbeFailure(message: String?) {
         probeFailure = message
     }
@@ -81,9 +88,36 @@ object RootState {
     }
 
     private fun probeSu(): Boolean {
+        // 先记录 su 到底在哪、能不能执行，失败提示里要用
+        SU_PATHS.firstOrNull { File(it).exists() }?.let { path ->
+            suPath = path
+            suExecutable = File(path).canExecute()
+            Log.e("RootState", "su found at $path executable=$suExecutable")
+        } ?: Log.e("RootState", "no su binary in ${SU_PATHS.joinToString()}")
+
         val out = execSu("id", 5) ?: return false
-        return out.contains("uid=0")
+        val granted = out.contains("uid=0")
+        if (granted) suExecutable = true
+        return granted
     }
+
+    /** 给用户看的一句话诊断 */
+    fun diagnose(): String = when {
+        isGranted() -> "已获取 Root"
+        suPath == null -> "系统里没找到 su（未 Root，或用的是只在授权后挂载 su 的方案）"
+        !suExecutable || probeFailure?.contains("Permission denied") == true ->
+            "找到 $suPath 但不可执行：Root 管理器没真正放行本应用"
+        else -> "Root 管理器拒绝了 su 请求"
+    }
+
+    private val SU_PATHS = listOf(
+        "/system/bin/su",
+        "/system/xbin/su",
+        "/sbin/su",
+        "/su/bin/su",
+        "/debug_ramdisk/su",
+        "/data/adb/ksu/bin/su",
+    )
 }
 
 /**

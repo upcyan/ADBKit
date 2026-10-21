@@ -144,11 +144,14 @@ class AdbViewModel(application: Application) : AndroidViewModel(application), Fa
             RootState.recordProbeFailure(null)
             val granted = reinitRootShell()
             refreshStateSync()
+            val denied = RootState.probeFailure?.contains("Permission denied") == true
             val message = when {
                 granted -> "已获取 Root 权限"
-                RootState.probeFailure?.contains("Permission denied") == true ->
-                    "系统拒绝了 su 执行（KernelSU/Magisk 没放行本应用）：请把授权改成「允许」后重启手机"
-                else -> "仍未获取 Root：请在 Root 管理器里允许本应用，或改用 adb 授予 WRITE_SECURE_SETTINGS"
+                // KernelSU / APatch 是按进程挂载 su 的：进程没被放行时 exec 直接 EACCES，
+                // 文件系统里也看不到 su，两者同时成立就说明是授权没下来，不是应用调用姿势问题
+                denied -> "su 执行被拒绝（本进程没被 root 管理器放行）：删掉授权记录重新添加并允许，再重启手机"
+                RootState.suPath == null -> "没找到 su：本机可能没有 Root，可用 adb 授予 WRITE_SECURE_SETTINGS 兜底"
+                else -> RootState.diagnose()
             }
             toast(getApplication(), message)
         }
