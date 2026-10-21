@@ -2,10 +2,12 @@ package com.lxithral.adbtools.ui
 
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.pager.HorizontalPager
@@ -16,6 +18,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
@@ -23,6 +26,9 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.lxithral.adbtools.R
+import com.lxithral.adbtools.logic.SystemSettingsNavigator
+import com.lxithral.adbtools.logic.SystemSettingsPage
+import com.lxithral.adbtools.logic.restartApp
 import com.lxithral.adbtools.ui.component.rememberBlurBackdrop
 import com.lxithral.adbtools.ui.navigation.BottomBarSlot
 import com.lxithral.adbtools.ui.theme.ThemeState
@@ -72,21 +78,45 @@ fun AdbScreen(viewModel: AdbViewModel) {
         Box(
             modifier = if (blurBackdrop != null) Modifier.layerBackdrop(blurBackdrop) else Modifier
         ) {
-            HorizontalPager(
-                state = pagerState,
+            // 底栏玻璃采样的是这一层（layerBackdrop），所以渐隐带必须画在层的内部，
+            // 否则玻璃采到的还是"没渐隐的内容"。
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .then(if (liquidGlassActive) Modifier.layerBackdrop(backdrop) else Modifier),
-                beyondViewportPageCount = 1
-            ) { page ->
-                when (page) {
-                    0 -> HomeContent(viewModel, padding, scrollBehavior)
-                    1 -> SettingsContent(viewModel, padding, scrollBehavior)
+                    .then(if (liquidGlassActive) Modifier.layerBackdrop(backdrop) else Modifier)
+            ) {
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize(),
+                    beyondViewportPageCount = 1
+                ) { page ->
+                    when (page) {
+                        0 -> HomeContent(viewModel, padding, scrollBehavior)
+                        1 -> SettingsContent(viewModel, padding, scrollBehavior)
+                    }
                 }
+
+                // 底栏下面这层渐隐：内容滑到悬浮底栏下方时先淡出成背景色。
+                // 不加这层的话，玻璃底栏会直接采样到滚动的文字 / 亮色卡片，
+                // 同一套底栏在两个页面、两个选中态下的玻璃浓淡完全不一样。
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(BackdropFadeHeight)
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(Color.Transparent, surfaceColor),
+                            )
+                        )
+                )
             }
         }
     }
 }
+
+/** 底栏背后内容渐隐带高度 */
+private val BackdropFadeHeight = 120.dp
 
 @Composable
 fun HomeContent(viewModel: AdbViewModel, padding: PaddingValues, scrollBehavior: ScrollBehavior) {
@@ -257,6 +287,26 @@ fun SettingsContent(viewModel: AdbViewModel, padding: PaddingValues, scrollBehav
             }
         }
         item {
+            SmallTitle(text = "系统设置")
+            Card(modifier = Modifier.padding(horizontal = 12.dp)) {
+                SystemPagePreference(
+                    title = "USB 调试",
+                    summary = "跳转到系统开发者选项中的 USB 调试开关",
+                    page = SystemSettingsPage.UsbDebugging
+                )
+                SystemPagePreference(
+                    title = "无线调试",
+                    summary = "系统无线调试开关与配对码（不支持的机型落到开发者选项）",
+                    page = SystemSettingsPage.WirelessDebugging
+                )
+                SystemPagePreference(
+                    title = "开发者选项",
+                    summary = "系统开发者选项总入口",
+                    page = SystemSettingsPage.DeveloperOptions
+                )
+            }
+        }
+        item {
             SmallTitle(text = "关于")
             Card(modifier = Modifier.padding(horizontal = 12.dp)) {
                 ArrowPreference(
@@ -291,8 +341,24 @@ fun SettingsContent(viewModel: AdbViewModel, padding: PaddingValues, scrollBehav
 private fun isIpv4(value: String): Boolean =
     value.matches(Regex("""^(\d{1,3}\.){3}\d{1,3}$"""))
 
+/** 系统设置页跳转行：跳不过去时明确提示，避免点了没反应 */
+@Composable
+private fun SystemPagePreference(title: String, summary: String, page: SystemSettingsPage) {
+    val context = LocalContext.current
+    ArrowPreference(
+        title = title,
+        summary = summary,
+        onClick = {
+            if (!SystemSettingsNavigator.open(context, page)) {
+                Toast.makeText(context, "无法打开系统页面，请从系统设置手动进入", Toast.LENGTH_SHORT).show()
+            }
+        }
+    )
+}
+
 @Composable
 private fun StatusCardSection(viewModel: AdbViewModel) {
+    val context = LocalContext.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -302,6 +368,7 @@ private fun StatusCardSection(viewModel: AdbViewModel) {
     ) {
         RootStatusCard(
             granted = viewModel.rootGranted,
+            onClick = { restartApp(context) },
             modifier = Modifier
                 .weight(1f)
                 .aspectRatio(1f)
@@ -328,7 +395,7 @@ private fun StatusCardSection(viewModel: AdbViewModel) {
 }
 
 @Composable
-private fun RootStatusCard(granted: Boolean, modifier: Modifier = Modifier) {
+private fun RootStatusCard(granted: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val statusColor = if (granted) Color(0xFF36D167) else Color(0xFFFF5A52)
     val statusBackground = if (granted) Color(0xFFDFFAE4) else Color(0xFFFFE5E3)
 
@@ -339,7 +406,8 @@ private fun RootStatusCard(granted: Boolean, modifier: Modifier = Modifier) {
         modifier = modifier,
         colors = CardDefaults.defaultColors(color = statusBackground),
         pressFeedbackType = PressFeedbackType.Tilt,
-        onClick = { /* Feedback only */ }
+        // 未授权时点一下重启进程：libsu 的 root shell 是进程级单例，只有重启才会重新申请
+        onClick = if (granted) { {} } else onClick
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             Box(
@@ -371,7 +439,7 @@ private fun RootStatusCard(granted: Boolean, modifier: Modifier = Modifier) {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = if (granted) "已获取" else "未获取",
+                    text = if (granted) "已获取" else "未获取 · 点此检测",
                     style = MiuixTheme.textStyles.body2,
                     color = textSecondaryColor,
                     fontWeight = FontWeight.Medium

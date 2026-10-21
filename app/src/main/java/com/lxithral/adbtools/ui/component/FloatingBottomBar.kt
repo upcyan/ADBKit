@@ -11,15 +11,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
@@ -37,7 +35,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.geometry.Offset
@@ -50,14 +47,15 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastCoerceIn
@@ -66,7 +64,6 @@ import kotlinx.coroutines.launch
 import com.lxithral.adbtools.ui.component.liquid.InnerShadow
 import com.lxithral.adbtools.ui.component.liquid.innerShadow
 import com.lxithral.adbtools.ui.component.liquid.lens
-import com.lxithral.adbtools.ui.component.liquid.rememberCombinedBackdrop
 import com.lxithral.adbtools.ui.component.liquid.vibrancy
 import com.lxithral.adbtools.ui.component.miuix.animation.DampedDragAnimation
 import com.lxithral.adbtools.ui.component.miuix.animation.InteractiveHighlight
@@ -78,7 +75,6 @@ import top.yukonga.miuix.kmp.blur.highlight.BloomStroke
 import top.yukonga.miuix.kmp.blur.highlight.Highlight
 import top.yukonga.miuix.kmp.blur.highlight.LightPosition
 import top.yukonga.miuix.kmp.blur.highlight.LightSource
-import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.blur.sensor.rememberDeviceTilt
 import top.yukonga.miuix.kmp.theme.LocalContentColor
@@ -92,6 +88,12 @@ import kotlin.math.sign
 import kotlin.math.sin
 
 val LocalFloatingBottomBarTabScale = staticCompositionLocalOf { { 1f } }
+
+/** 底栏左右内边距：胶囊与内容区共用，改这里就够 */
+private val BarHorizontalPadding = 4.dp
+
+/** 玻璃高度（底栏整体 64dp，上下各留 4dp） */
+private val BarHeight = 56.dp
 
 private val iosIndicatorSpecular: Highlight = Highlight(
     width = 1.dp,
@@ -170,6 +172,8 @@ fun RowScope.FloatingBottomBarItem(
     content: @Composable ColumnScope.() -> Unit
 ) {
     val scale = LocalFloatingBottomBarTabScale.current
+    val inheritedColor = LocalContentColor.current
+    val contentColor = if (selected) MiuixTheme.colorScheme.primary else inheritedColor
     Column(
         modifier
             .semantics(mergeDescendants = true) {
@@ -198,8 +202,11 @@ fun RowScope.FloatingBottomBarItem(
             },
         verticalArrangement = Arrangement.spacedBy(1.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
-        content = content
-    )
+    ) {
+        CompositionLocalProvider(LocalContentColor provides contentColor) {
+            content()
+        }
+    }
 }
 
 @Composable
@@ -210,22 +217,33 @@ fun FloatingBottomBar(
     backdrop: Backdrop,
     tabsCount: Int,
     isBlurEnabled: Boolean = true,
+    tabMinWidth: Dp = 76.dp,
     content: @Composable RowScope.((Int) -> Unit) -> Unit
 ) {
     val isInDark = isInDarkTheme()
     val pillShape = remember { CircleShape }
-    val accentColor = MiuixTheme.colorScheme.primary
     val tabContentColor = MiuixTheme.colorScheme.onSurface
     val surfaceContainer = MiuixTheme.colorScheme.surfaceContainer
     val containerColor = if (isBlurEnabled) surfaceContainer.copy(0.4f) else surfaceContainer
 
-    val tabsBackdrop = rememberLayerBackdrop()
     val density = LocalDensity.current
     val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
     val animationScope = rememberCoroutineScope()
 
-    var tabWidthPx by remember { mutableFloatStateOf(0f) }
+    // 宽度必须由 tab 数量算出来，不能靠 IntrinsicSize.Min：
+    // 带 weight(1f) 的 item 在 intrinsic 测量里不保证算上 defaultMinSize，
+    // 之前由此导致 totalWidth 比真实内容窄 8dp，胶囊宽度 / 位置整体偏左。
+    val barWidth = tabMinWidth * tabsCount + BarHorizontalPadding * 2
+    val contentLeftPx = with(density) { BarHorizontalPadding.toPx() }
+
     var totalWidthPx by remember { mutableFloatStateOf(0f) }
+    var contentWidthPx by remember { mutableFloatStateOf(0f) }
+    var tabWidthPx by remember { mutableFloatStateOf(0f) }
+
+    // 内容区（去掉左右 4dp padding）宽度 → 单个 tab 宽度，和 item 的实际布局严格一致
+    LaunchedEffect(contentWidthPx, tabsCount) {
+        tabWidthPx = if (contentWidthPx > 0f) contentWidthPx / tabsCount else 0f
+    }
 
     val offsetAnimation = remember { Animatable(0f) }
     val rubberBandPx = with(density) { 4.dp.toPx() }
@@ -245,9 +263,8 @@ fun FloatingBottomBar(
 
     fun indexAt(positionX: Float): Int {
         if (tabWidthPx == 0f) return currentIndex
-        val horizontalPaddingPx = with(density) { 4.dp.toPx() }
         val logicalX = if (isLtr) positionX else totalWidthPx - positionX
-        return ((logicalX - horizontalPaddingPx) / tabWidthPx)
+        return ((logicalX - contentLeftPx) / tabWidthPx)
             .toInt()
             .coerceIn(0, tabsCount - 1)
     }
@@ -259,7 +276,9 @@ fun FloatingBottomBar(
             valueRange = 0f..(tabsCount - 1).toFloat(),
             visibilityThreshold = 0.001f,
             initialScale = 1f,
-            pressedScale = 78f / 56f,
+            // 胶囊放大在原示例里是按 78/56 给整条底栏留余量用的；这里只有一个胶囊，
+            // 1.39 倍会直接顶出底栏外，看起来就是"胶囊位置错乱"，所以收敛到轻微反馈。
+            pressedScale = 1.06f,
             canDrag = { offset ->
                 offset.x in 0f..totalWidthPx
             },
@@ -318,8 +337,8 @@ fun FloatingBottomBar(
             animationScope = animationScope,
             position = { size, _ ->
                 Offset(
-                    if (isLtr) (dampedDragAnimation.value + 0.5f) * tabWidthPx + panelOffset
-                    else size.width - (dampedDragAnimation.value + 0.5f) * tabWidthPx + panelOffset,
+                    if (isLtr) contentLeftPx + (dampedDragAnimation.value + 0.5f) * tabWidthPx + panelOffset
+                    else size.width - contentLeftPx - (dampedDragAnimation.value + 0.5f) * tabWidthPx + panelOffset,
                     size.height / 2f
                 )
             }
@@ -327,23 +346,23 @@ fun FloatingBottomBar(
     }
 
     val baseHighlight = rememberGravityRotatedHighlight(iosIndicatorSpecular, extraDegrees = -45f)
-    val pillHighlight = rememberGravityRotatedHighlight(iosIndicatorSpecular, extraDegrees = 90f)
-
-    val combinedBackdrop = rememberCombinedBackdrop(backdrop, tabsBackdrop)
 
     Box(
-        modifier = modifier.width(IntrinsicSize.Min),
+        modifier = modifier
+            .width(barWidth)
+            .height(64.dp)
+            .then(dampedDragAnimation.modifier)
+            .graphicsLayer { translationX = panelOffset },
         contentAlignment = Alignment.CenterStart
     ) {
-        Row(
+        // ① 底栏玻璃
+        Box(
             Modifier
+                .fillMaxWidth()
+                .height(BarHeight)
                 .onGloballyPositioned { coords ->
                     totalWidthPx = coords.size.width.toFloat()
-                    val contentWidthPx = totalWidthPx - with(density) { 8.dp.toPx() }
-                    tabWidthPx = (contentWidthPx / tabsCount).coerceAtLeast(0f)
                 }
-                .selectableGroup()
-                .graphicsLayer { translationX = panelOffset }
                 .dropShadow(
                     shape = pillShape,
                     shadow = Shadow(
@@ -384,130 +403,60 @@ fun FloatingBottomBar(
                         interactiveHighlight.modifier.then(interactiveHighlight.gestureModifier)
                     } else Modifier
                 )
-                .then(dampedDragAnimation.modifier)
-                .height(64.dp)
-                .padding(4.dp),
+        )
+
+        // ② 选中胶囊：画在玻璃之上、文字之下。
+        //    之前是把整行文字（换成主色）采样进 tabsBackdrop 再用胶囊"透"出来，
+        //    于是胶囊亮度完全取决于它底下压着的页面内容——主页那边压着亮色文字，胶囊就发灰发白，
+        //    设置那边压着纯黑，胶囊就发暗，两个 tab 看起来不是一套样式。
+        //    现在胶囊只负责底色，文字用正常文本绘制（清晰、恒定），两个 tab 完全一致。
+        if (tabWidthPx > 0f) {
+            val tabWidthDp = with(density) { tabWidthPx.toDp() }
+            Box(
+                Modifier
+                    .graphicsLayer {
+                        val progressOffset = contentLeftPx + dampedDragAnimation.value * tabWidthPx
+                        translationX = if (isLtr) progressOffset else -progressOffset
+                        scaleX = dampedDragAnimation.scaleX
+                        scaleY = dampedDragAnimation.scaleY
+                    }
+                    .clip(pillShape)
+                    // 四边留同样的 4dp：之前胶囊和玻璃一样高（都 56dp），上下贴边、
+                    // 左右却各留 4dp，看上去就是"边距没做恒定"。
+                    .padding(vertical = BarHorizontalPadding)
+                    // 胶囊必须"自发光"：底色接近不透明，否则它压着什么内容就长什么样
+                    // ——主页底下有亮色文字、设置底下纯黑，两个选中态看起来完全不是一套。
+                    .background(color = surfaceContainer.copy(alpha = 0.94f), shape = pillShape)
+                    .background(
+                        // 浅色下 surfaceContainer 本身接近白色，叠一点点黑才看得出胶囊；
+                        // 深浅两套的"胶囊 vs 玻璃"对比度按像素对齐到同一量级。
+                        color = if (isInDark) Color.White.copy(alpha = 0.07f) else Color.Black.copy(alpha = 0.09f),
+                        shape = pillShape,
+                    )
+                    .innerShadow(shape = pillShape) {
+                        InnerShadow(
+                            radius = 8.dp * dampedDragAnimation.pressProgress,
+                            color = Color.Black.copy(alpha = 0.15f),
+                            alpha = dampedDragAnimation.pressProgress,
+                        )
+                    }
+                    .height(BarHeight - BarHorizontalPadding * 2)
+                    .width(tabWidthDp)
+            )
+        }
+
+        // ③ 内容：选中项自己用主色，其余用 onSurface
+        Row(
+            Modifier
+                .fillMaxHeight()
+                .padding(horizontal = BarHorizontalPadding)
+                // padding 之后量到的是真实内容宽度：胶囊宽度/位移都按它算，和 item 布局一一对应
+                .onSizeChanged { contentWidthPx = it.width.toFloat() }
+                .selectableGroup(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             CompositionLocalProvider(LocalContentColor provides tabContentColor) {
                 content(::activateTab)
-            }
-        }
-
-        if (isBlurEnabled) {
-            CompositionLocalProvider(
-                LocalFloatingBottomBarTabScale provides {
-                    lerp(1f, 1.2f, dampedDragAnimation.pressProgress)
-                },
-                LocalContentColor provides accentColor,
-            ) {
-                Row(
-                    Modifier
-                        .clearAndSetSemantics {}
-                        .alpha(0f)
-                        .layerBackdrop(tabsBackdrop)
-                        .graphicsLayer { translationX = panelOffset }
-                        .drawBackdrop(
-                            backdrop = backdrop,
-                            shape = { pillShape },
-                            effects = {
-                                vibrancy()
-                                blur(4.dp.toPx(), 4.dp.toPx())
-                                lens(
-                                    refractionHeight = 24.dp.toPx(),
-                                    refractionAmount = 24.dp.toPx(),
-                                )
-                            },
-                            onDrawSurface = { drawRect(containerColor) },
-                        )
-                        .then(interactiveHighlight.modifier)
-                        .height(56.dp)
-                        .padding(horizontal = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    content = { content(::activateTab) }
-                )
-            }
-        }
-
-        if (tabWidthPx > 0f) {
-            val tabWidthDp = with(density) { tabWidthPx.toDp() }
-            if (isBlurEnabled) {
-                Box(
-                    Modifier
-                        .padding(horizontal = 4.dp)
-                        .graphicsLayer {
-                            val progressOffset = dampedDragAnimation.value * tabWidthPx
-                            translationX = if (isLtr) progressOffset + panelOffset else -progressOffset + panelOffset
-                        }
-                        .drawBackdrop(
-                            backdrop = combinedBackdrop,
-                            shape = { pillShape },
-                            effects = {
-                                val progress = dampedDragAnimation.pressProgress
-                                lens(
-                                    refractionHeight = 10.dp.toPx() * progress,
-                                    refractionAmount = 14.dp.toPx() * progress,
-                                    depthEffect = true,
-                                    chromaticAberration = 0.5f,
-                                )
-                            },
-                            highlight = { pillHighlight.value.copy(alpha = dampedDragAnimation.pressProgress) },
-                            layerBlock = {
-                                scaleX = dampedDragAnimation.scaleX
-                                scaleY = dampedDragAnimation.scaleY
-                                val velocity = dampedDragAnimation.velocity / 10f
-                                scaleX /= 1f - (velocity * 0.75f).fastCoerceIn(-0.2f, 0.2f)
-                                scaleY *= 1f - (velocity * 0.25f).fastCoerceIn(-0.2f, 0.2f)
-                            },
-                            onDrawSurface = {
-                                val progress = dampedDragAnimation.pressProgress
-                                drawRect(
-                                    color = if (!isInDark) Color.Black.copy(alpha = 0.1f) else Color.White.copy(alpha = 0.1f),
-                                    alpha = 1f - progress,
-                                )
-                                drawRect(Color.Black.copy(alpha = 0.03f * progress))
-                            },
-                        )
-                        .innerShadow(shape = pillShape) {
-                            InnerShadow(
-                                radius = 8.dp * dampedDragAnimation.pressProgress,
-                                color = Color.Black.copy(alpha = 0.15f),
-                                alpha = dampedDragAnimation.pressProgress,
-                            )
-                        }
-                        .height(56.dp)
-                        .width(tabWidthDp)
-                )
-            } else {
-                Box(
-                    Modifier
-                        .padding(horizontal = 4.dp)
-                        .graphicsLayer {
-                            val progressOffset = dampedDragAnimation.value * tabWidthPx
-                            translationX = if (isLtr) progressOffset + panelOffset else -progressOffset + panelOffset
-                        }
-                        .clip(pillShape)
-                        .background(accentColor.copy(alpha = 0.15f), pillShape)
-                        .height(56.dp)
-                        .width(tabWidthDp),
-                    contentAlignment = Alignment.CenterStart,
-                ) {
-                    CompositionLocalProvider(LocalContentColor provides accentColor) {
-                        Row(
-                            Modifier
-                                .clearAndSetSemantics {}
-                                .wrapContentWidth(align = Alignment.Start, unbounded = true)
-                                .requiredWidth(with(density) { (totalWidthPx - 8.dp.toPx()).toDp() })
-                                .height(56.dp)
-                                .graphicsLayer {
-                                    val progressOffset = dampedDragAnimation.value * tabWidthPx
-                                    translationX = if (isLtr) -progressOffset else progressOffset
-                                },
-                            verticalAlignment = Alignment.CenterVertically,
-                            content = { content(::activateTab) },
-                        )
-                    }
-                }
             }
         }
     }

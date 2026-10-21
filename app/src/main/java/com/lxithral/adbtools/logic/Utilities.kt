@@ -1,8 +1,23 @@
 package com.lxithral.adbtools.logic
 
 import android.content.Context
+import android.content.Intent
+import android.os.Process
 import android.util.Log
 import com.topjohnwu.superuser.Shell
+
+/**
+ * 重启应用进程。
+ *
+ * libsu 的 root shell 是进程级单例：应用启动时没拿到 root，之后在权限管理器里再授权，
+ * 进程内的 Shell 也不会重新申请，只能重启进程让 libsu 重新走一遍 su 握手。
+ */
+fun restartApp(context: Context) {
+    val intent = context.packageManager.getLaunchIntentForPackage(context.packageName) ?: return
+    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+    context.startActivity(intent)
+    Process.killProcess(Process.myPid())
+}
 
 fun getPrivilegeLevel(
     requiredPrivilegeLevel: PrivilegeLevel = PrivilegeLevel.Root,

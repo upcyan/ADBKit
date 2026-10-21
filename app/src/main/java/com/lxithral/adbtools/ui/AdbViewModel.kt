@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.lxithral.adbtools.logic.SettingsAccess
 import com.lxithral.adbtools.logic.WirelessDebugging
 import com.lxithral.adbtools.logic.executeShellCommand
 import com.lxithral.adbtools.memory.FairMemoryReceiver
@@ -28,6 +29,14 @@ class AdbViewModel(application: Application) : AndroidViewModel(application), Fa
 
     companion object {
         private const val TAG = "AdbViewModel"
+
+        // 无线调试开关后等待 adbd 重启并分配端口的轮询节奏
+        private const val PORT_SETTLE_ATTEMPTS = 6
+        private const val PORT_SETTLE_INTERVAL_MS = 500L
+
+        private const val KEY_ADB_ENABLED = "adb_enabled"
+        private const val KEY_DEV_SETTINGS = "development_settings_enabled"
+        private const val KEY_ADB_WIFI_ENABLED = "adb_wifi_enabled"
     }
 
     var wirelessAdbEnabled by mutableStateOf(value = false)
@@ -86,43 +95,64 @@ class AdbViewModel(application: Application) : AndroidViewModel(application), Fa
     private fun refreshStateSync() {
         val context = getApplication<Application>()
 
-        // 合并多条 shell 命令为一次执行
-        val batchResult = executeShellCommand(
-            "echo \"$(settings get global adb_wifi_enabled)\" && " +
-            "echo \"$(settings get global adb_enabled)\" && " +
-            "echo \"$(settings get global development_settings_enabled)\" && " +
+        // setting 项：ContentResolver 直读，不依赖 Root（读 global 无需权限）
+        usbAdbEnabled = SettingsAccess.isEnabled(context, KEY_ADB_ENABLED)
+        developerOptionsEnabled = SettingsAccess.isEnabled(context, KEY_DEV_SETTINGS)
+        val wifiSettingEnabled = SettingsAccess.isEnabled(context, KEY_ADB_WIFI_ENABLED)
+
+        // 属性项：只能走 shell（Root 设备可用，无 Root 时为空，界面照常显示"已关闭"）
+        val propResult = executeShellCommand(
             "echo \"$(getprop persist.security.adbinstall)\" && " +
-            "echo \"$(getprop persist.security.adbinput)\" && " +
-            "echo \"$(getprop service.adb.tls.port)\"",
+            "echo \"$(getprop persist.security.adbinput)\"",
             context
         ).lines()
-
-        wirelessAdbEnabled = batchResult.getOrElse(0) { "" }.trim() == "1" ||
-            WirelessDebugging.getEnabled(context)
-        usbAdbEnabled = batchResult.getOrElse(1) { "" }.trim() == "1"
-        developerOptionsEnabled = batchResult.getOrElse(2) { "" }.trim() == "1"
-        usbInstallEnabled = batchResult.getOrElse(3) { "" }.trim() == "1"
-        usbSecurityEnabled = batchResult.getOrElse(4) { "" }.trim() == "1"
+        usbInstallEnabled = propResult.getOrElse(0) { "" }.trim() == "1"
+        usbSecurityEnabled = propResult.getOrElse(1) { "" }.trim() == "1"
 
         rootGranted = Shell.isAppGrantedRoot() == true
         ipAddress = WirelessDebugging.getAddress(context)
-        // 批量命令里已带回 service.adb.tls.port；无 Root 时批量命令拿不到，单独补查（属性全局可读）
-        port = batchResult.getOrElse(5) { "" }.trim().ifEmpty { WirelessDebugging.getPort(context) }
+
+        // 端口：先读属性（便宜）；只有开关是开的、属性又没给端口时才去拉 dumpsys
+        // （HyperOS 3 只在 dumpsys adb 里暴露端口）。这样关着无线调试时每 10s
+        // 的轮询只有一次 getprop，不会一直去 dump adb 服务。
+        val propPort = WirelessDebugging.getPropPort()
+        val resolvedPort = propPort.ifEmpty {
+            if (wifiSettingEnabled) WirelessDebugging.getPort(context) else ""
+        }
+        port = resolvedPort
+
+        // 端口存活也说明无线调试在跑，避免个别 ROM 不写 adb_wifi_enabled 时状态误判
+        wirelessAdbEnabled = wifiSettingEnabled || resolvedPort.isNotEmpty()
     }
 
     fun toggleDeveloperOptions(enabled: Boolean) {
-        val value = if (enabled) "1" else "0"
-        executeAction("settings put global development_settings_enabled $value", if (enabled) "开启" else "关闭")
+        toggleSetting(KEY_DEV_SETTINGS, enabled, "开发者选项")
     }
 
     fun toggleUsbDebugging(enabled: Boolean) {
-        val value = if (enabled) "1" else "0"
-        executeAction("settings put global adb_enabled $value", if (enabled) "开启" else "关闭")
+        toggleSetting(KEY_ADB_ENABLED, enabled, "USB 调试")
+    }
+
+    private fun toggleSetting(key: String, enabled: Boolean, label: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            val ok = SettingsAccess.putInt(context, key, if (enabled) 1 else 0)
+            refreshStateSync()
+            toast(
+                context,
+                if (ok) "$label 已${if (enabled) "开启" else "关闭"}"
+                else "$label 切换失败：没有写入权限，请用 adb 授予 WRITE_SECURE_SETTINGS"
+            )
+        }
     }
 
     fun toggleUsbInstall(enabled: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
+            if (Shell.isAppGrantedRoot() != true) {
+                toast(context, "USB 安装需要 Root 权限")
+                return@launch
+            }
             val isMiui = executeShellCommand("getprop ro.miui.ui.version.name", context).isNotBlank()
 
             if (isMiui) {
@@ -141,11 +171,9 @@ class AdbViewModel(application: Application) : AndroidViewModel(application), Fa
                 executeShellCommand("setprop persist.security.adbinstall $value", context)
             }
 
-            withContext(Dispatchers.Main) {
-                Toast.makeText(context, if (enabled) "已开启 USB 安装" else "已关闭 USB 安装", Toast.LENGTH_SHORT).show()
-            }
             delay(200.milliseconds)
             refreshStateSync()
+            toast(context, if (enabled) "已开启 USB 安装" else "已关闭 USB 安装")
         }
     }
 
@@ -178,31 +206,49 @@ class AdbViewModel(application: Application) : AndroidViewModel(application), Fa
     }
 
     fun toggleUsbSecurity(enabled: Boolean) {
-        val value = if (enabled) "1" else "0"
-        executeAction("setprop persist.security.adbinput $value", if (enabled) "开启" else "关闭")
-    }
-
-    private fun executeAction(command: String, label: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
-            executeShellCommand(command, context)
-            withContext(Dispatchers.Main) {
-                Toast.makeText(context, "已发送命令：$label", Toast.LENGTH_SHORT).show()
+            if (Shell.isAppGrantedRoot() != true) {
+                toast(context, "USB 调试（安全设置）需要 Root 权限")
+                return@launch
             }
+            val value = if (enabled) "1" else "0"
+            executeShellCommand("setprop persist.security.adbinput $value", context)
             delay(200.milliseconds)
             refreshStateSync()
+            toast(context, if (enabled) "已开启 USB 调试（安全设置）" else "已关闭 USB 调试（安全设置）")
         }
     }
 
     fun toggleWirelessAdb(enabled: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
-            WirelessDebugging.setEnabled(context, enabled)
-            delay(200.milliseconds)
-            refreshStateSync()
-            // 端口属性由 adbd 稍后写入，补刷一次
-            delay(1500)
-            refreshStateSync()
+            val written = WirelessDebugging.setEnabled(context, enabled)
+
+            // adbd 起停 + 端口分配有几拍延迟：最多等 3s 让状态与端口收敛
+            var settled = false
+            repeat(PORT_SETTLE_ATTEMPTS) { attempt ->
+                if (attempt > 0) delay(PORT_SETTLE_INTERVAL_MS)
+                refreshStateSync()
+                if (wirelessAdbEnabled == enabled) {
+                    settled = true
+                    if (!enabled || port.isNotEmpty()) return@launch
+                }
+            }
+
+            val message = when {
+                !written -> "无线调试切换失败：没有写入权限，请用 adb 授予 WRITE_SECURE_SETTINGS 或授予 Root"
+                !settled -> if (enabled) "系统未响应，请到系统无线调试页开启" else "系统未响应，请到系统无线调试页关闭"
+                // 已开启但没拿到端口：不是错误，界面会显示"端口获取中…"
+                else -> null
+            }
+            message?.let { toast(context, it) }
+        }
+    }
+
+    private suspend fun toast(context: Context, message: String) {
+        withContext(Dispatchers.Main) {
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
         }
     }
 

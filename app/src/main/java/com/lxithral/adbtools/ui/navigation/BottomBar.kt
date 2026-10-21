@@ -34,6 +34,9 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 private data class BottomBarItem(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector)
 
+/** 单个 tab 的最小宽度：底栏总宽与 item 宽度共用，必须一致，否则胶囊会和 item 对不齐 */
+private val TabMinWidth = 76.dp
+
 private val bottomBarItems = listOf(
     BottomBarItem("主页", MiuixIcons.Home),
     BottomBarItem("设置", MiuixIcons.Settings),
@@ -85,12 +88,13 @@ fun BottomBar(
                 // ★ 关键开关：液态玻璃 = 折射透镜；设备不支持 RuntimeShader 时优雅降级为不透明胶囊
                 isBlurEnabled = ThemeState.bottomBarStyle == ThemeState.BOTTOM_BAR_LIQUID_GLASS &&
                     isRuntimeShaderSupported(),
+                tabMinWidth = TabMinWidth,
             ) { activateTab ->
                 bottomBarItems.forEachIndexed { index, item ->
                     FloatingBottomBarItem(
                         selected = pagerState.currentPage == index,
                         onClick = { activateTab(index) },
-                        modifier = Modifier.defaultMinSize(minWidth = 76.dp),
+                        modifier = Modifier.defaultMinSize(minWidth = TabMinWidth),
                     ) {
                         Icon(item.icon, contentDescription = item.label)
                         Text(item.label, fontSize = 11.sp, lineHeight = 14.sp, maxLines = 1)

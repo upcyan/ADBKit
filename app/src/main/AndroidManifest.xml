@@ -5,6 +5,16 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 无 Root 设备靠它写 Settings.Global；用 adb 一次性授予：
+         adb shell pm grant com.lxithral.adbtools android.permission.WRITE_SECURE_SETTINGS -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+    <!-- Android 17 无线调试端口只在 dumpsys adb 里，读取需要 DUMP：
+         adb shell pm grant com.lxithral.adbtools android.permission.DUMP -->
+    <uses-permission
+        android:name="android.permission.DUMP"
+        tools:ignore="ProtectedPermissions" />
 
     <application
         android:name=".MainApp"
