@@ -19,6 +19,21 @@ fun restartApp(context: Context) {
     Process.killProcess(Process.myPid())
 }
 
+/**
+ * 重新申请一次 root shell，不用杀进程。
+ *
+ * 场景：App 启动时还没在权限管理器里授权，libsu 建了一个非 root 的缓存 shell；
+ * 之后用户再授权，进程内的 Shell 也不会重新握手。关掉缓存实例再 [Shell.getShell]
+ * 会重新走一遍 su 请求，授权后就能立刻拿到 root。
+ *
+ * @return 重新握手后是否拿到了 root
+ */
+fun reinitRootShell(): Boolean {
+    runCatching { Shell.getCachedShell()?.close() }
+    runCatching { Shell.getShell() }
+    return Shell.isAppGrantedRoot() == true
+}
+
 fun getPrivilegeLevel(
     requiredPrivilegeLevel: PrivilegeLevel = PrivilegeLevel.Root,
     @Suppress("UNUSED_PARAMETER") context: Context? = null,

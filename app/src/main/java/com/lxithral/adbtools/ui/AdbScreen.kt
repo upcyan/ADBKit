@@ -28,7 +28,6 @@ import androidx.compose.ui.unit.dp
 import com.lxithral.adbtools.R
 import com.lxithral.adbtools.logic.SystemSettingsNavigator
 import com.lxithral.adbtools.logic.SystemSettingsPage
-import com.lxithral.adbtools.logic.restartApp
 import com.lxithral.adbtools.ui.component.rememberBlurBackdrop
 import com.lxithral.adbtools.ui.navigation.BottomBarSlot
 import com.lxithral.adbtools.ui.theme.ThemeState
@@ -358,7 +357,6 @@ private fun SystemPagePreference(title: String, summary: String, page: SystemSet
 
 @Composable
 private fun StatusCardSection(viewModel: AdbViewModel) {
-    val context = LocalContext.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -368,7 +366,7 @@ private fun StatusCardSection(viewModel: AdbViewModel) {
     ) {
         RootStatusCard(
             granted = viewModel.rootGranted,
-            onClick = { restartApp(context) },
+            onClick = { viewModel.retryRootDetection() },
             modifier = Modifier
                 .weight(1f)
                 .aspectRatio(1f)

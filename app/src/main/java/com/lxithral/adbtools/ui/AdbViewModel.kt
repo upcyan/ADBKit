@@ -13,6 +13,7 @@ import androidx.lifecycle.viewModelScope
 import com.lxithral.adbtools.logic.SettingsAccess
 import com.lxithral.adbtools.logic.WirelessDebugging
 import com.lxithral.adbtools.logic.executeShellCommand
+import com.lxithral.adbtools.logic.reinitRootShell
 import com.lxithral.adbtools.memory.FairMemoryReceiver
 import com.topjohnwu.superuser.Shell
 import kotlinx.coroutines.Dispatchers
@@ -133,24 +134,48 @@ class AdbViewModel(application: Application) : AndroidViewModel(application), Fa
         toggleSetting(KEY_ADB_ENABLED, enabled, "USB 调试")
     }
 
+    /**
+     * 重新申请 root（不杀进程）。用户刚在权限管理器里授完权时点一下即可生效——
+     * libsu 的 shell 是进程级单例，不重开的话会一直用启动时那个非 root 实例。
+     */
+    fun retryRootDetection() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val granted = reinitRootShell()
+            refreshStateSync()
+            toast(
+                getApplication(),
+                if (granted) "已获取 Root 权限"
+                else "仍未获取 Root：请在 Root 管理器里允许本应用，或改用 adb 授予 WRITE_SECURE_SETTINGS"
+            )
+        }
+    }
+
+    /** 拿到 root 就用；没有就尝试重新握手一次 */
+    private fun ensureRoot(): Boolean =
+        Shell.isAppGrantedRoot() == true || reinitRootShell()
+
+    private fun writeFailureMessage(label: String): String =
+        if (Shell.isAppGrantedRoot() == true) {
+            "$label 切换失败：系统拒绝了这次写入，请检查安全中心 / 隐私保护是否限制修改系统设置"
+        } else {
+            "$label 切换失败：没有写入权限。请在 Root 管理器授权后点 Root 卡片重新检测，" +
+                "或在电脑上执行 adb shell pm grant com.lxithral.adbtools android.permission.WRITE_SECURE_SETTINGS"
+        }
+
     private fun toggleSetting(key: String, enabled: Boolean, label: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
             val ok = SettingsAccess.putInt(context, key, if (enabled) 1 else 0)
             refreshStateSync()
-            toast(
-                context,
-                if (ok) "$label 已${if (enabled) "开启" else "关闭"}"
-                else "$label 切换失败：没有写入权限，请用 adb 授予 WRITE_SECURE_SETTINGS"
-            )
+            toast(context, if (ok) "$label 已${if (enabled) "开启" else "关闭"}" else writeFailureMessage(label))
         }
     }
 
     fun toggleUsbInstall(enabled: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
-            if (Shell.isAppGrantedRoot() != true) {
-                toast(context, "USB 安装需要 Root 权限")
+            if (!ensureRoot()) {
+                toast(context, "USB 安装需要 Root：请在 Root 管理器里授权本应用")
                 return@launch
             }
             val isMiui = executeShellCommand("getprop ro.miui.ui.version.name", context).isNotBlank()
@@ -208,8 +233,8 @@ class AdbViewModel(application: Application) : AndroidViewModel(application), Fa
     fun toggleUsbSecurity(enabled: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
-            if (Shell.isAppGrantedRoot() != true) {
-                toast(context, "USB 调试（安全设置）需要 Root 权限")
+            if (!ensureRoot()) {
+                toast(context, "USB 调试（安全设置）需要 Root：请在 Root 管理器里授权本应用")
                 return@launch
             }
             val value = if (enabled) "1" else "0"
@@ -237,7 +262,7 @@ class AdbViewModel(application: Application) : AndroidViewModel(application), Fa
             }
 
             val message = when {
-                !written -> "无线调试切换失败：没有写入权限，请用 adb 授予 WRITE_SECURE_SETTINGS 或授予 Root"
+                !written -> writeFailureMessage("无线调试")
                 !settled -> if (enabled) "系统未响应，请到系统无线调试页开启" else "系统未响应，请到系统无线调试页关闭"
                 // 已开启但没拿到端口：不是错误，界面会显示"端口获取中…"
                 else -> null

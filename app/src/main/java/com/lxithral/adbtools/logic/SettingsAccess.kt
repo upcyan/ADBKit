@@ -3,6 +3,7 @@ package com.lxithral.adbtools.logic
 import android.content.Context
 import android.provider.Settings
 import android.util.Log
+import com.topjohnwu.superuser.Shell
 
 /**
  * `Settings.Global` 读写。
@@ -34,14 +35,28 @@ object SettingsAccess {
             return true
         }
 
-        // ContentResolver 没权限：试试 root shell（已 Root 设备走这里）
-        executeShellCommand("settings put global $key $value", context)
-        if (getInt(context, key) == value) {
+        // ContentResolver 没权限：先按当前 shell 试一次 root（已 Root 设备走这里）
+        if (writeViaRootShell(context, key, value)) {
             Log.d(TAG, "putInt($key=$value) ok via root shell")
             return true
         }
 
-        Log.e(TAG, "putInt($key=$value) failed: no WRITE_SECURE_SETTINGS and no root")
+        // 还失败：多半是启动时还没授权，libsu 缓存了非 root shell。
+        // 重新握手一次再试，避免"明明给了 root 还是写不进去"。
+        if (Shell.isAppGrantedRoot() != true && reinitRootShell()) {
+            Log.d(TAG, "putInt($key=$value) retry after root shell re-init")
+            if (writeViaRootShell(context, key, value)) {
+                Log.d(TAG, "putInt($key=$value) ok via root shell (after re-init)")
+                return true
+            }
+        }
+
+        Log.e(TAG, "putInt($key=$value) failed: no WRITE_SECURE_SETTINGS and no usable root shell")
         return false
+    }
+
+    private fun writeViaRootShell(context: Context, key: String, value: Int): Boolean {
+        executeShellCommand("settings put global $key $value", context)
+        return getInt(context, key) == value
     }
 }
