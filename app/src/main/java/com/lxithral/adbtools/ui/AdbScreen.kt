@@ -217,7 +217,8 @@ fun HomeContent(viewModel: AdbViewModel, padding: PaddingValues, scrollBehavior:
                         !viewModel.developerOptionsEnabled -> "请先开启开发者选项"
                         viewModel.wirelessAdbEnabled && ipValid && viewModel.port.isNotEmpty() ->
                             "已开启 (${viewModel.ipAddress}:${viewModel.port})"
-                        viewModel.wirelessAdbEnabled -> "已开启"
+                        viewModel.wirelessAdbEnabled && !ipValid -> "已开启（未连接 Wi-Fi）"
+                        viewModel.wirelessAdbEnabled -> "已开启 · 端口获取中…"
                         else -> "已关闭"
                     },
                     checked = viewModel.wirelessAdbEnabled,
@@ -232,24 +233,6 @@ fun HomeContent(viewModel: AdbViewModel, padding: PaddingValues, scrollBehavior:
                         )
                     }
                 )
-                AnimatedVisibility(
-                    visible = viewModel.wirelessAdbEnabled,
-                    enter = expandVertically(expandFrom = Alignment.Top),
-                    exit = shrinkVertically(shrinkTowards = Alignment.Top)
-                ) {
-                    // 端口由 adbd 稍后写入；拿不到时绝不显示悬空的"IP:"
-                    val addressText = when {
-                        !isIpv4(viewModel.ipAddress) -> "未连接 Wi-Fi"
-                        viewModel.port.isEmpty() -> "端口获取中…"
-                        else -> "连接地址：${viewModel.ipAddress}:${viewModel.port}"
-                    }
-                    Text(
-                        text = addressText,
-                        style = MiuixTheme.textStyles.body2,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                    )
-                }
             }
         }
     }
