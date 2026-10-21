@@ -13,6 +13,7 @@ import androidx.lifecycle.viewModelScope
 import com.lxithral.adbtools.logic.SettingsAccess
 import com.lxithral.adbtools.logic.WirelessDebugging
 import com.lxithral.adbtools.logic.executeShellCommand
+import com.lxithral.adbtools.logic.RootState
 import com.lxithral.adbtools.logic.reinitRootShell
 import com.lxithral.adbtools.memory.FairMemoryReceiver
 import com.topjohnwu.superuser.Shell
@@ -110,7 +111,7 @@ class AdbViewModel(application: Application) : AndroidViewModel(application), Fa
         usbInstallEnabled = propResult.getOrElse(0) { "" }.trim() == "1"
         usbSecurityEnabled = propResult.getOrElse(1) { "" }.trim() == "1"
 
-        rootGranted = Shell.isAppGrantedRoot() == true
+        rootGranted = RootState.isGranted()
         ipAddress = WirelessDebugging.getAddress(context)
 
         // 端口：关着无线调试时只读一次属性（最便宜）；开着才走完整链路
@@ -140,22 +141,25 @@ class AdbViewModel(application: Application) : AndroidViewModel(application), Fa
      */
     fun retryRootDetection() {
         viewModelScope.launch(Dispatchers.IO) {
+            RootState.recordProbeFailure(null)
             val granted = reinitRootShell()
             refreshStateSync()
-            toast(
-                getApplication(),
-                if (granted) "已获取 Root 权限"
-                else "仍未获取 Root：请在 Root 管理器里允许本应用，或改用 adb 授予 WRITE_SECURE_SETTINGS"
-            )
+            val message = when {
+                granted -> "已获取 Root 权限"
+                RootState.probeFailure?.contains("Permission denied") == true ->
+                    "系统拒绝了 su 执行（KernelSU/Magisk 没放行本应用）：请把授权改成「允许」后重启手机"
+                else -> "仍未获取 Root：请在 Root 管理器里允许本应用，或改用 adb 授予 WRITE_SECURE_SETTINGS"
+            }
+            toast(getApplication(), message)
         }
     }
 
     /** 拿到 root 就用；没有就尝试重新握手一次 */
     private fun ensureRoot(): Boolean =
-        Shell.isAppGrantedRoot() == true || reinitRootShell()
+        RootState.isGranted() || reinitRootShell()
 
     private fun writeFailureMessage(label: String): String =
-        if (Shell.isAppGrantedRoot() == true) {
+        if (RootState.isGranted()) {
             "$label 切换失败：系统拒绝了这次写入，请检查安全中心 / 隐私保护是否限制修改系统设置"
         } else {
             "$label 切换失败：没有写入权限。请在 Root 管理器授权后点 Root 卡片重新检测，" +

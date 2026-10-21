@@ -3,7 +3,6 @@ package com.lxithral.adbtools.logic
 import android.content.Context
 import android.provider.Settings
 import android.util.Log
-import com.topjohnwu.superuser.Shell
 
 /**
  * `Settings.Global` 读写。
@@ -43,7 +42,7 @@ object SettingsAccess {
 
         // 还失败：多半是启动时还没授权，libsu 缓存了非 root shell。
         // 重新握手一次再试，避免"明明给了 root 还是写不进去"。
-        if (Shell.isAppGrantedRoot() != true && reinitRootShell()) {
+        if (!RootState.isGranted() && reinitRootShell()) {
             Log.d(TAG, "putInt($key=$value) retry after root shell re-init")
             if (writeViaRootShell(context, key, value)) {
                 Log.d(TAG, "putInt($key=$value) ok via root shell (after re-init)")
