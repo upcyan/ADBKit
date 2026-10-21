@@ -29,15 +29,17 @@ android {
         applicationId = "com.lxithral.adbtools"
         minSdk = 33
         targetSdk = 36
-        versionCode = 4
-        versionName = "1.0.4"
+        versionCode = 5
+        versionName = "1.0.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
         create("release") {
-            storeFile = file(keystoreProperties.getProperty("storeFile") ?: "placeholder.jks")
+            // keystore.properties 里的 storeFile 相对仓库根目录（和 CI 生成的配置一致），
+            // 不能直接 file()——那是相对 app/ 解析的
+            storeFile = rootProject.file(keystoreProperties.getProperty("storeFile") ?: "placeholder.jks")
             storePassword = keystoreProperties.getProperty("storePassword") ?: ""
             keyAlias = keystoreProperties.getProperty("keyAlias") ?: ""
             keyPassword = keystoreProperties.getProperty("keyPassword") ?: ""
