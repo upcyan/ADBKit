@@ -93,7 +93,7 @@ class AdbViewModel(application: Application) : AndroidViewModel(application), Fa
         }
     }
 
-    private fun refreshStateSync() {
+    private suspend fun refreshStateSync() {
         val context = getApplication<Application>()
 
         // setting 项：ContentResolver 直读，不依赖 Root（读 global 无需权限）
@@ -113,12 +113,12 @@ class AdbViewModel(application: Application) : AndroidViewModel(application), Fa
         rootGranted = Shell.isAppGrantedRoot() == true
         ipAddress = WirelessDebugging.getAddress(context)
 
-        // 端口：先读属性（便宜）；只有开关是开的、属性又没给端口时才去拉 dumpsys
-        // （HyperOS 3 只在 dumpsys adb 里暴露端口）。这样关着无线调试时每 10s
-        // 的轮询只有一次 getprop，不会一直去 dump adb 服务。
-        val propPort = WirelessDebugging.getPropPort()
-        val resolvedPort = propPort.ifEmpty {
-            if (wifiSettingEnabled) WirelessDebugging.getPort(context) else ""
+        // 端口：关着无线调试时只读一次属性（最便宜）；开着才走完整链路
+        // 属性 → dumpsys adb（需要 Root）→ mDNS 广播（不需要权限）。
+        val resolvedPort = if (wifiSettingEnabled) {
+            WirelessDebugging.getPort(context)
+        } else {
+            WirelessDebugging.getPropPort()
         }
         port = resolvedPort
 

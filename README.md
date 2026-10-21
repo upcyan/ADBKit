@@ -8,7 +8,7 @@
 - **USB 调试** — 一键开关
 - **USB 安装** — 一键开关（支持 MIUI / HyperOS）
 - **USB 调试安全设置** — 一键开关
-- **无线调试** — 一键开关，显示当前可连接的 `IP:端口`（兼容 Android 17 / HyperOS 不写入 `service.adb.tls.port` 的机型）
+- **无线调试** — 一键开关，显示当前可连接的 `IP:端口`。Android 17 / HyperOS 不再把端口写进系统属性，App 会依次尝试系统属性 → `dumpsys adb` → mDNS 广播反查，**无 Root 也能拿到端口**
 - **系统页面跳转** — 设置页可直接跳转到系统的 USB 调试 / 无线调试 / 开发者选项页
 - **快捷磁贴** — 5 个 Quick Settings Tile，下拉控制中心即可操作
 - **长按磁贴打开应用** — 长按任意磁贴即可跳转打开 App
@@ -34,8 +34,8 @@
 
 - Android 13+ (API 33)
 - **Root 可选**：
-  - 有 Root：全部功能可用；`USB 安装`、`USB 调试（安全设置）`、以及 Android 17 / HyperOS 上的端口读取依赖 Root
-  - 无 Root：用 adb 授权下面两条权限后，开发者选项 / USB 调试 / 无线调试的开关和状态读取都能用（端口在部分机型上读不到，会显示"端口获取中…"）
+  - 有 Root：全部功能可用；`USB 安装`、`USB 调试（安全设置）` 依赖 Root
+  - 无 Root：用 adb 授权下面两条权限后，开发者选项 / USB 调试 / 无线调试的开关、状态、端口都能用
 
 ```sh
 adb shell pm grant com.lxithral.adbtools android.permission.WRITE_SECURE_SETTINGS
